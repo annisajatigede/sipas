@@ -1,0 +1,1356 @@
+<!DOCTYPE html>
+<html lang="id" class="h-full">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SIPAS - Sistem Pengangkutan Sampah Terpadu</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: { primary: { 50: '#ecfdf5', 100: '#d1fae5', 500: '#10b981', 600: '#059669', 700: '#047857' } }
+                }
+            }
+        }
+    </script>
+    <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script>
+        // Mock fallback wrapper for browser sandbox preview
+        if (typeof google === 'undefined' || !google.script) {
+            if (!localStorage.getItem('sipas_mock_db')) {
+                localStorage.setItem('sipas_mock_db', JSON.stringify({
+                    citizens: [
+                        { citizenId: 'DRM-000001', userId: 'U011', name: 'Siti Aminah', email: 'warga1@sipas.id', phone: '081300000001', nik: '317101', address: 'Jl. Menteng No. 1', village: 'Menteng', district: 'Menteng', qrCodeUrl: 'https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=DRM-000001' }
+                    ],
+                    workers: [
+                        { workerId: 'W01', userId: 'U002', name: 'Budi Santoso', email: 'budi@sipas.id', phone: '081234567890', zoneId: 'Z01', vehicleId: 'V01', statusOnline: 'ONLINE' }
+                    ],
+                    zones: [
+                        { zoneId: 'Z01', zoneName: 'Zona 01', region: 'Pusat Kota', village: 'Menteng', district: 'Menteng' }
+                    ],
+                    vehicles: [
+                        { vehicleId: 'V01', type: 'Truk Besar', platNumber: 'B 1234 ABC', maxCapKg: 1000, filledCapKg: 250, status: 'AKTIF' }
+                    ],
+                    tps: [
+                        { tpsId: 'TPS01', name: 'TPS Menteng', address: 'Jl. Latuharhary' }
+                    ],
+                    reports: [
+                        { reportId: 'RPT-001', citizenId: 'DRM-000001', trashType: 'Rumah Tangga', volumeKg: 50, address: 'Jl. Menteng No. 1', status: 'DITAWARKAN', priority: 'TINGGI', photoUrl: 'https://placehold.co/400' }
+                    ],
+                    logs: [
+                        { logId: 'LOG-1', userId: 'U001', action: 'LOGIN', detail: 'Admin logged in', timestamp: '2026-06-01 08:00' }
+                    ]
+                }));
+            }
+
+            window.google = {
+                script: {
+                    run: new Proxy({}, {
+                        get(target, prop) {
+                            return function(...args) {
+                                return new Proxy({}, {
+                                    get(t, methodProp) {
+                                        return function(...callArgs) {
+                                            console.log('[Mock GAS] Calling:', methodProp, callArgs);
+                                            setTimeout(() => {
+                                                const db = JSON.parse(localStorage.getItem('sipas_mock_db'));
+                                                const callback = args[0];
+                                                
+                                                if (methodProp === 'loginUser') {
+                                                    const email = callArgs[0];
+                                                    if (email === 'admin@sipas.id') {
+                                                        callback({ success: true, user: { userId: 'U001', role: 'ADMIN', name: 'Admin Utama', email: email } });
+                                                    } else if (email === 'budi@sipas.id') {
+                                                        callback({ success: true, user: { userId: 'U002', role: 'PETUGAS', name: 'Budi Santoso', email: email, workerId: 'W01', zoneId: 'Z01', vehicleId: 'V01', statusOnline: 'ONLINE' } });
+                                                    } else {
+                                                        callback({ success: true, user: { userId: 'U011', role: 'WARGA', name: 'Siti Aminah', email: email, citizenId: 'DRM-000001', address: 'Jl. Menteng No. 1', qrCodeUrl: 'https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=DRM-000001' } });
+                                                    }
+                                                } else if (methodProp === 'getAdminDashboardData') {
+                                                    callback({
+                                                        success: true,
+                                                        metrics: { citizensCount: db.citizens.length, onlineWorkers: db.workers.filter(w => w.statusOnline === 'ONLINE').length, totalReports: db.reports.length, completedReports: db.reports.filter(r => r.status === 'SELESAI').length, todayWeightKg: db.reports.reduce((acc, r) => acc + (r.volumeKg || 0), 0) },
+                                                        reports: db.reports,
+                                                        citizens: db.citizens,
+                                                        workers: db.workers,
+                                                        zones: db.zones,
+                                                        vehicles: db.vehicles,
+                                                        tps: db.tps,
+                                                        logs: db.logs
+                                                    });
+                                                } else if (methodProp === 'getCitizenData') {
+                                                    callback({ success: true, reports: db.reports.filter(r => r.citizenId === callArgs[0]) });
+                                                } else if (methodProp === 'getWorkerData') {
+                                                    callback({ success: true, tasks: db.reports.map((r, i) => ({ taskId: 'TSK-00' + (i+1), reportId: r.reportId, taskStatus: r.status, trashType: r.trashType, volumeKg: r.volumeKg, address: r.address, photoUrl: r.photoUrl })), vehicle: db.vehicles[0] });
+                                                } else if (methodProp === 'saveCitizenAdmin') {
+                                                    db.citizens.push({ citizenId: 'DRM-0000' + (db.citizens.length + 1), userId: 'U0' + Math.floor(Math.random()*900+100), name: callArgs[0].name, email: callArgs[0].email, phone: callArgs[0].phone, address: callArgs[0].address, village: 'Menteng', district: 'Menteng', qrCodeUrl: 'https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=DRM-NEW' });
+                                                    localStorage.setItem('sipas_mock_db', JSON.stringify(db));
+                                                    callback({ success: true, message: 'Warga berhasil ditambahkan.' });
+                                                } else if (methodProp === 'deleteCitizenAdmin') {
+                                                    db.citizens = db.citizens.filter(c => c.citizenId !== callArgs[0]);
+                                                    localStorage.setItem('sipas_mock_db', JSON.stringify(db));
+                                                    callback({ success: true, message: 'Warga berhasil dihapus.' });
+                                                } else if (methodProp === 'saveWorkerAdmin') {
+                                                    db.workers.push({ workerId: 'W0' + (db.workers.length + 1), userId: 'U0' + Math.floor(Math.random()*900+100), name: callArgs[0].name, email: callArgs[0].email, phone: callArgs[0].phone, zoneId: callArgs[0].zoneId, vehicleId: callArgs[0].vehicleId, statusOnline: 'ONLINE' });
+                                                    localStorage.setItem('sipas_mock_db', JSON.stringify(db));
+                                                    callback({ success: true, message: 'Petugas berhasil ditambahkan.' });
+                                                } else if (methodProp === 'deleteWorkerAdmin') {
+                                                    db.workers = db.workers.filter(w => w.workerId !== callArgs[0]);
+                                                    localStorage.setItem('sipas_mock_db', JSON.stringify(db));
+                                                    callback({ success: true, message: 'Petugas berhasil dihapus.' });
+                                                } else if (methodProp === 'saveZoneAdmin') {
+                                                    db.zones.push({ zoneId: 'Z0' + (db.zones.length + 1), zoneName: callArgs[0].zoneName, region: callArgs[0].region, village: 'Menteng', district: 'Menteng' });
+                                                    localStorage.setItem('sipas_mock_db', JSON.stringify(db));
+                                                    callback({ success: true, message: 'Zona berhasil ditambahkan.' });
+                                                } else if (methodProp === 'deleteZoneAdmin') {
+                                                    db.zones = db.zones.filter(z => z.zoneId !== callArgs[0]);
+                                                    localStorage.setItem('sipas_mock_db', JSON.stringify(db));
+                                                    callback({ success: true, message: 'Zona berhasil dihapus.' });
+                                                } else if (methodProp === 'saveVehicleAdmin') {
+                                                    db.vehicles.push({ vehicleId: 'V0' + (db.vehicles.length + 1), type: callArgs[0].type, platNumber: callArgs[0].platNumber, maxCapKg: Number(callArgs[0].maxCapKg), filledCapKg: 0, status: 'AKTIF' });
+                                                    localStorage.setItem('sipas_mock_db', JSON.stringify(db));
+                                                    callback({ success: true, message: 'Kendaraan berhasil ditambahkan.' });
+                                                } else if (methodProp === 'deleteVehicleAdmin') {
+                                                    db.vehicles = db.vehicles.filter(v => v.vehicleId !== callArgs[0]);
+                                                    localStorage.setItem('sipas_mock_db', JSON.stringify(db));
+                                                    callback({ success: true, message: 'Kendaraan berhasil dihapus.' });
+                                                } else if (methodProp === 'saveTpsAdmin') {
+                                                    db.tps.push({ tpsId: 'TPS0' + (db.tps.length + 1), name: callArgs[0].name, address: callArgs[0].address });
+                                                    localStorage.setItem('sipas_mock_db', JSON.stringify(db));
+                                                    callback({ success: true, message: 'TPS berhasil ditambahkan.' });
+                                                } else if (methodProp === 'deleteTpsAdmin') {
+                                                    db.tps = db.tps.filter(t => t.tpsId !== callArgs[0]);
+                                                    localStorage.setItem('sipas_mock_db', JSON.stringify(db));
+                                                    callback({ success: true, message: 'TPS berhasil dihapus.' });
+                                                } else {
+                                                    callback({ success: true, message: 'Operasi berhasil dieksekusi.' });
+                                                }
+                                            }, 250);
+                                        };
+                                    }
+                                });
+                            };
+                        }
+                    })
+                }
+            };
+        }
+    </script>
+</head>
+<body class="h-full bg-slate-50 dark:bg-slate-900 text-slate-800 dark:text-slate-100 font-sans transition-colors duration-200" x-data="appData()" x-init="initApp()">
+
+    <div class="min-h-full flex flex-col justify-between">
+        <nav class="bg-white dark:bg-slate-800 shadow-sm sticky top-0 z-40 border-b border-slate-200 dark:border-slate-700">
+            <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                <div class="flex justify-between h-16 items-center">
+                    <div class="flex items-center space-x-3">
+                        <div class="bg-primary-600 text-white p-2 rounded-xl shadow-md">
+                            <i class="fa-solid fa-recycle text-xl"></i>
+                        </div>
+                        <div>
+                            <span class="text-xl font-black tracking-tight text-primary-600 dark:text-primary-400">SIPAS</span>
+                            <span class="block text-[10px] text-slate-500 font-medium uppercase tracking-wider">Sistem Pengangkutan Sampah</span>
+                        </div>
+                    </div>
+
+                    <!-- Datasheet Connection Status Badge -->
+                    <div class="hidden md:flex items-center space-x-2 bg-emerald-50 dark:bg-slate-700/50 border border-emerald-200 dark:border-slate-600 px-3 py-1.5 rounded-full">
+                        <span class="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                        <span class="text-xs font-bold text-emerald-700 dark:text-emerald-300">Datasheet Connected (11 Sheets)</span>
+                    </div>
+                    
+                    <div class="flex items-center space-x-4">
+                        <button @click="toggleDarkMode()" class="p-2 rounded-lg bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300">
+                            <i :class="darkMode ? 'fa-solid fa-sun' : 'fa-solid fa-moon'"></i>
+                        </button>
+
+                        <template x-if="!currentUser">
+                            <div class="flex space-x-2">
+                                <button @click="currentView = 'login'" class="px-4 py-2 text-sm font-semibold text-primary-600 bg-primary-50 dark:bg-slate-700 rounded-lg">Masuk</button>
+                                <button @click="currentView = 'register'" class="px-4 py-2 text-sm font-semibold text-white bg-primary-600 rounded-lg shadow-md">Daftar Warga</button>
+                            </div>
+                        </template>
+                        <template x-if="currentUser">
+                            <div class="flex items-center space-x-3">
+                                <span class="text-sm font-medium" x-text="currentUser.name + ' (' + currentUser.role + ')'"></span>
+                                <button @click="logout()" class="px-3 py-1.5 text-xs font-semibold text-red-600 bg-red-50 dark:bg-slate-700 rounded-lg">Keluar</button>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+            </div>
+        </nav>
+
+        <main class="flex-grow">
+            <!-- PUBLIC VIEW -->
+            <template x-if="currentView === 'public'">
+                <div class="space-y-12 pb-16">
+                    <div class="bg-gradient-to-br from-primary-600 to-emerald-800 text-white py-20 px-4 text-center rounded-b-3xl shadow-xl">
+                        <div class="max-w-3xl mx-auto space-y-6">
+                            <span class="bg-emerald-500/30 text-emerald-100 text-xs font-semibold px-3 py-1 rounded-full uppercase">Layanan Resmi Kebersihan</span>
+                            <h1 class="text-4xl sm:text-5xl font-black">Kelola Sampah, Jaga Lingkungan</h1>
+                            <p class="text-lg text-emerald-100">Laporkan sampah di sekitar Anda dan biarkan petugas terdekat menanganinya secara real-time.</p>
+                            <div class="flex justify-center gap-4">
+                                <button @click="currentView = 'login'" class="px-8 py-4 bg-white text-emerald-700 font-bold rounded-xl shadow-lg hover:bg-emerald-50 transition">
+                                    <i class="fa-solid fa-camera mr-2"></i> Masuk & Lapor Sampah
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </template>
+
+            <!-- LOGIN VIEW -->
+            <template x-if="currentView === 'login'">
+                <div class="max-w-md mx-auto px-4 py-16">
+                    <div class="bg-white dark:bg-slate-800 p-8 rounded-3xl shadow-xl space-y-6 border border-slate-200 dark:border-slate-700">
+                        <h2 class="text-2xl font-black text-center">Masuk ke SIPAS</h2>
+                        <form @submit.prevent="submitLogin()" class="space-y-4">
+                            <div>
+                                <label class="text-xs text-slate-500 block mb-1">Demo: admin@sipas.id / budi@sipas.id / warga1@sipas.id</label>
+                                <input type="email" x-model="loginForm.email" placeholder="Email" required class="w-full px-4 py-3 rounded-xl border bg-slate-50 dark:bg-slate-900 border-slate-300 dark:border-slate-600">
+                            </div>
+                            <input type="password" x-model="loginForm.password" placeholder="Password" required class="w-full px-4 py-3 rounded-xl border bg-slate-50 dark:bg-slate-900 border-slate-300 dark:border-slate-600">
+                            <button type="submit" class="w-full py-4 bg-primary-600 text-white font-bold rounded-xl shadow-md">Masuk</button>
+                        </form>
+                    </div>
+                </div>
+            </template>
+
+            <!-- REGISTER VIEW -->
+            <template x-if="currentView === 'register'">
+                <div class="max-w-xl mx-auto px-4 py-12">
+                    <div class="bg-white dark:bg-slate-800 p-8 rounded-3xl shadow-xl space-y-6 border border-slate-200 dark:border-slate-700">
+                        <h2 class="text-2xl font-black text-center">Registrasi Warga Baru</h2>
+                        <form @submit.prevent="submitRegister()" class="space-y-4">
+                            <input type="text" x-model="regForm.name" placeholder="Nama Lengkap" required class="w-full px-4 py-3 rounded-xl border bg-slate-50 dark:bg-slate-900">
+                            <input type="text" x-model="regForm.phone" placeholder="No HP" required class="w-full px-4 py-3 rounded-xl border bg-slate-50 dark:bg-slate-900">
+                            <input type="email" x-model="regForm.email" placeholder="Email" required class="w-full px-4 py-3 rounded-xl border bg-slate-50 dark:bg-slate-900">
+                            <input type="password" x-model="regForm.password" placeholder="Password" required class="w-full px-4 py-3 rounded-xl border bg-slate-50 dark:bg-slate-900">
+                            <input type="text" x-model="regForm.nik" placeholder="NIK (Opsional)" class="w-full px-4 py-3 rounded-xl border bg-slate-50 dark:bg-slate-900">
+                            <textarea x-model="regForm.address" placeholder="Alamat Rumah" required class="w-full px-4 py-3 rounded-xl border bg-slate-50 dark:bg-slate-900"></textarea>
+                            <div class="grid grid-cols-2 gap-2">
+                                <input type="text" x-model="regForm.village" placeholder="Kelurahan" required class="px-3 py-2 rounded-xl border bg-slate-50 dark:bg-slate-900 text-sm">
+                                <input type="text" x-model="regForm.district" placeholder="Kecamatan" required class="px-3 py-2 rounded-xl border bg-slate-50 dark:bg-slate-900 text-sm">
+                            </div>
+                            <button type="submit" class="w-full py-4 bg-primary-600 text-white font-bold rounded-xl shadow-md">Daftar Sekarang</button>
+                        </form>
+                    </div>
+                </div>
+            </template>
+
+            <!-- CITIZEN DASHBOARD -->
+            <template x-if="currentView === 'citizen_dashboard'">
+                <div class="max-w-4xl mx-auto px-4 py-8 space-y-6">
+                    <div class="bg-white dark:bg-slate-800 p-6 rounded-3xl shadow-xl border flex flex-col sm:flex-row justify-between items-center gap-6">
+                        <div class="space-y-2 text-center sm:text-left">
+                            <span class="text-xs font-bold uppercase bg-primary-100 text-primary-800 px-3 py-1 rounded-full">Dashboard Warga</span>
+                            <h2 class="text-2xl font-black" x-text="currentUser.name"></h2>
+                            <p class="text-xs text-slate-500 font-mono">ID: <span x-text="currentUser.citizenId"></span> | Alamat: <span x-text="currentUser.address"></span></p>
+                        </div>
+                        <div class="bg-slate-50 dark:bg-slate-900 p-4 rounded-2xl border text-center">
+                            <img :src="currentUser.qrCodeUrl" class="w-24 h-24 mx-auto rounded-lg shadow mb-2" alt="QR Warga">
+                            <span class="text-[10px] text-slate-400">QR Code Identifikasi</span>
+                        </div>
+                    </div>
+
+                    <div class="flex justify-between items-center">
+                        <button @click="openReportModal()" class="px-8 py-4 bg-primary-600 hover:bg-primary-700 text-white font-bold rounded-2xl shadow-xl text-lg transition transform hover:-translate-y-0.5">
+                            <i class="fa-solid fa-camera mr-2"></i> Lapor Sampah Sekarang
+                        </button>
+                        <button @click="loadCitizenData()" class="px-4 py-2 bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 text-xs font-bold rounded-xl flex items-center shadow">
+                            <i class="fa-solid fa-rotate mr-2"></i> Reload
+                        </button>
+                    </div>
+
+                    <div class="bg-white dark:bg-slate-800 p-6 rounded-3xl shadow-md border space-y-4">
+                        <h3 class="text-xl font-bold">Riwayat & Status Laporan Anda</h3>
+                        <div class="space-y-3">
+                            <template x-for="rep in citizenReports" :key="rep.reportId">
+                                <div class="p-4 rounded-2xl border bg-slate-50 dark:bg-slate-900 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                                    <div class="space-y-1">
+                                        <div class="flex items-center space-x-2">
+                                            <span class="text-xs font-mono font-bold text-primary-600" x-text="rep.reportId"></span>
+                                            <span class="px-2 py-0.5 bg-primary-100 text-primary-800 text-[10px] font-bold rounded" x-text="rep.status"></span>
+                                        </div>
+                                        <h4 class="font-bold text-sm" x-text="rep.address"></h4>
+                                        <p class="text-xs text-slate-500" x-text="'Jenis: ' + rep.trashType + ' | Volume: ' + rep.volumeKg + ' Kg'"></p>
+                                    </div>
+                                    <div class="flex items-center space-x-2">
+                                        <a :href="rep.photoUrl" target="_blank" class="px-3 py-1.5 bg-slate-200 dark:bg-slate-700 text-xs font-bold rounded-xl">Foto</a>
+                                        <template x-if="rep.status === 'SELESAI'">
+                                            <button @click="openRatingModal(rep.reportId)" class="px-3 py-1.5 bg-amber-500 text-white text-xs font-bold rounded-xl">Beri Rating</button>
+                                        </template>
+                                    </div>
+                                </div>
+                            </template>
+                            <template x-if="!citizenReports || citizenReports.length === 0">
+                                <p class="text-center text-slate-400 py-6">Belum ada riwayat laporan.</p>
+                            </template>
+                        </div>
+                    </div>
+                </div>
+            </template>
+
+            <!-- WORKER DASHBOARD -->
+            <template x-if="currentView === 'worker_dashboard'">
+                <div class="max-w-4xl mx-auto px-4 py-8 space-y-6">
+                    <div class="bg-white dark:bg-slate-800 p-6 rounded-3xl shadow-xl border flex flex-col sm:flex-row justify-between items-center gap-6">
+                        <div class="space-y-2 text-center sm:text-left">
+                            <span class="text-xs font-bold uppercase bg-emerald-100 text-emerald-800 px-3 py-1 rounded-full">Dashboard Petugas Lapangan</span>
+                            <h2 class="text-2xl font-black" x-text="currentUser.name"></h2>
+                            <p class="text-xs text-slate-500">ID Petugas: <span x-text="currentUser.workerId"></span> | Zona: <span x-text="currentUser.zoneId"></span></p>
+                        </div>
+                        <div class="flex items-center space-x-4">
+                            <button @click="toggleOnlineStatus()" :class="workerStatus === 'ONLINE' ? 'bg-emerald-600' : 'bg-slate-400'" class="px-6 py-3 text-white font-bold rounded-xl text-sm shadow">
+                                Status: <span x-text="workerStatus"></span>
+                            </button>
+                            <button @click="loadWorkerData()" class="p-3 bg-slate-200 dark:bg-slate-700 rounded-xl text-xs font-bold shadow" title="Refresh Tugas">
+                                <i class="fa-solid fa-rotate mr-1"></i> Reload
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="bg-white dark:bg-slate-800 p-6 rounded-3xl shadow-md border space-y-3">
+                        <div class="flex justify-between items-center">
+                            <h3 class="text-lg font-bold">Kapasitas Armada (<span x-text="workerVehicle.type"></span>)</h3>
+                            <button @click="emptyVehicle()" class="px-3 py-1.5 bg-primary-600 text-white text-xs font-bold rounded-xl">Kosongkan Kendaraan (TPS)</button>
+                        </div>
+                        <div class="w-full bg-slate-200 dark:bg-slate-700 h-4 rounded-full overflow-hidden">
+                            <div class="bg-primary-600 h-full transition-all duration-300" :style="'width: ' + Math.min(100, (workerVehicle.filledCapKg / workerVehicle.maxCapKg) * 100) + '%'"></div>
+                        </div>
+                        <p class="text-xs text-slate-500 text-right"><span x-text="workerVehicle.filledCapKg"></span> / <span x-text="workerVehicle.maxCapKg"></span> Kg</p>
+                    </div>
+
+                    <div class="bg-white dark:bg-slate-800 p-6 rounded-3xl shadow-md border space-y-4">
+                        <h3 class="text-xl font-bold">Daftar Tugas Pengangkutan</h3>
+                        <div class="space-y-4">
+                            <template x-for="task in workerTasks" :key="task.taskId">
+                                <div class="p-5 rounded-2xl border bg-slate-50 dark:bg-slate-900 space-y-3">
+                                    <div class="flex justify-between items-start">
+                                        <div>
+                                            <span class="text-xs font-mono font-bold text-primary-600" x-text="task.taskId"></span>
+                                            <h4 class="font-bold text-base mt-1" x-text="task.address"></h4>
+                                            <p class="text-xs text-slate-500" x-text="'Jenis: ' + task.trashType + ' | Volume: ' + task.volumeKg + ' Kg'"></p>
+                                        </div>
+                                        <span class="px-2.5 py-1 bg-amber-100 text-amber-800 text-xs font-bold rounded-lg" x-text="task.taskStatus"></span>
+                                    </div>
+                                    <div class="flex flex-wrap gap-2 pt-2 border-t dark:border-slate-800">
+                                        <template x-if="task.taskStatus === 'DITAWARKAN'">
+                                            <div class="space-x-2">
+                                                <button @click="workerAction(task.taskId, 'TERIMA')" class="px-4 py-2 bg-emerald-600 text-white font-bold text-xs rounded-xl shadow">Terima Tugas</button>
+                                                <button @click="workerAction(task.taskId, 'TOLAK')" class="px-4 py-2 bg-red-600 text-white font-bold text-xs rounded-xl shadow">Tolak</button>
+                                            </div>
+                                        </template>
+                                        <template x-if="task.taskStatus === 'DITERIMA'">
+                                            <div class="space-x-2">
+                                                <a :href="'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(task.address)" target="_blank" class="px-4 py-2 bg-blue-600 text-white font-bold text-xs rounded-xl inline-block shadow">Navigasi Peta</a>
+                                                <button @click="workerAction(task.taskId, 'TIBA')" class="px-4 py-2 bg-primary-600 text-white font-bold text-xs rounded-xl shadow">Saya Tiba</button>
+                                            </div>
+                                        </template>
+                                        <template x-if="task.taskStatus === 'TIBA'">
+                                            <button @click="openCompleteModal(task.taskId)" class="px-4 py-2 bg-purple-600 text-white font-bold text-xs rounded-xl shadow">Foto Bukti & Selesai</button>
+                                        </template>
+                                    </div>
+                                </div>
+                            </template>
+                            <template x-if="!workerTasks || workerTasks.length === 0">
+                                <p class="text-center text-slate-400 py-6">Belum ada tugas saat ini.</p>
+                            </template>
+                        </div>
+                    </div>
+                </div>
+            </template>
+
+            <!-- ADMIN DASHBOARD & COMPREHENSIVE MANAGEMENT -->
+            <template x-if="currentView === 'admin_dashboard'">
+                <div class="max-w-7xl mx-auto px-4 py-8 space-y-6">
+                    <div class="flex justify-between items-center flex-wrap gap-4 bg-white dark:bg-slate-800 p-6 rounded-3xl shadow-xl border">
+                        <div>
+                            <span class="text-xs uppercase bg-primary-100 text-primary-800 font-bold px-3 py-1 rounded-full">Panel Kontrol Utama</span>
+                            <h2 class="text-3xl font-black mt-2">Admin Dashboard Operasional</h2>
+                        </div>
+                        <div class="flex gap-2">
+                            <button @click="loadAdminData()" class="px-4 py-2 bg-slate-200 dark:bg-slate-700 text-xs font-bold rounded-xl shadow flex items-center">
+                                <i class="fa-solid fa-rotate mr-2"></i> Refresh Data & Sheets
+                            </button>
+                            <button @click="setupDatabase()" class="px-4 py-2 bg-primary-600 text-white font-bold rounded-xl text-sm shadow-md">Setup / Reset Database</button>
+                        </div>
+                    </div>
+
+                    <!-- Admin Sub-Navigation Tabs -->
+                    <div class="flex space-x-2 border-b border-slate-200 dark:border-slate-700 pb-2 overflow-x-auto">
+                        <button @click="adminTab = 'dashboard'" :class="adminTab === 'dashboard' ? 'bg-primary-600 text-white' : 'bg-white dark:bg-slate-800 text-slate-600'" class="px-4 py-2 rounded-xl font-bold text-xs shadow whitespace-nowrap">Dashboard & Live Map</button>
+                        <button @click="adminTab = 'laporan'" :class="adminTab === 'laporan' ? 'bg-primary-600 text-white' : 'bg-white dark:bg-slate-800 text-slate-600'" class="px-4 py-2 rounded-xl font-bold text-xs shadow whitespace-nowrap">Seluruh Laporan</button>
+                        <button @click="adminTab = 'warga'" :class="adminTab === 'warga' ? 'bg-primary-600 text-white' : 'bg-white dark:bg-slate-800 text-slate-600'" class="px-4 py-2 rounded-xl font-bold text-xs shadow whitespace-nowrap">Kelola Warga</button>
+                        <button @click="adminTab = 'petugas'" :class="adminTab === 'petugas' ? 'bg-primary-600 text-white' : 'bg-white dark:bg-slate-800 text-slate-600'" class="px-4 py-2 rounded-xl font-bold text-xs shadow whitespace-nowrap">Kelola Petugas</button>
+                        <button @click="adminTab = 'zona'" :class="adminTab === 'zona' ? 'bg-primary-600 text-white' : 'bg-white dark:bg-slate-800 text-slate-600'" class="px-4 py-2 rounded-xl font-bold text-xs shadow whitespace-nowrap">Kelola Zona</button>
+                        <button @click="adminTab = 'kendaraan'" :class="adminTab === 'kendaraan' ? 'bg-primary-600 text-white' : 'bg-white dark:bg-slate-800 text-slate-600'" class="px-4 py-2 rounded-xl font-bold text-xs shadow whitespace-nowrap">Kendaraan</button>
+                        <button @click="adminTab = 'tps'" :class="adminTab === 'tps' ? 'bg-primary-600 text-white' : 'bg-white dark:bg-slate-800 text-slate-600'" class="px-4 py-2 rounded-xl font-bold text-xs shadow whitespace-nowrap">Kelola TPS</button>
+                        <button @click="adminTab = 'penugasan'" :class="adminTab === 'penugasan' ? 'bg-primary-600 text-white' : 'bg-white dark:bg-slate-800 text-slate-600'" class="px-4 py-2 rounded-xl font-bold text-xs shadow whitespace-nowrap">Atur Penugasan</button>
+                        <button @click="adminTab = 'statistik'" :class="adminTab === 'statistik' ? 'bg-primary-600 text-white' : 'bg-white dark:bg-slate-800 text-slate-600'" class="px-4 py-2 rounded-xl font-bold text-xs shadow whitespace-nowrap">Statistik</button>
+                        <button @click="adminTab = 'logs'" :class="adminTab === 'logs' ? 'bg-primary-600 text-white' : 'bg-white dark:bg-slate-800 text-slate-600'" class="px-4 py-2 rounded-xl font-bold text-xs shadow whitespace-nowrap">Log Aktivitas</button>
+                    </div>
+
+                    <!-- Admin Tab 1: Dashboard & Live Map -->
+                    <template x-if="adminTab === 'dashboard'">
+                        <div class="space-y-6">
+                            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+                                <div class="bg-white dark:bg-slate-800 p-6 rounded-2xl shadow-md border space-y-2">
+                                    <span class="text-xs text-slate-500 uppercase font-bold">Total Warga</span>
+                                    <h3 class="text-3xl font-black text-primary-600" x-text="adminData.citizens.length"></h3>
+                                </div>
+                                <div class="bg-white dark:bg-slate-800 p-6 rounded-2xl shadow-md border space-y-2">
+                                    <span class="text-xs text-slate-500 uppercase font-bold">Petugas Online</span>
+                                    <h3 class="text-3xl font-black text-emerald-600" x-text="adminData.workers.length"></h3>
+                                </div>
+                                <div class="bg-white dark:bg-slate-800 p-6 rounded-2xl shadow-md border space-y-2">
+                                    <span class="text-xs text-slate-500 uppercase font-bold">Laporan Selesai</span>
+                                    <h3 class="text-3xl font-black text-blue-600" x-text="adminData.reports.filter(r => r.status === 'SELESAI').length"></h3>
+                                </div>
+                                <div class="bg-white dark:bg-slate-800 p-6 rounded-2xl shadow-md border space-y-2">
+                                    <span class="text-xs text-slate-500 uppercase font-bold">Total Berat Sampah</span>
+                                    <h3 class="text-3xl font-black text-purple-600" x-text="(adminData.metrics.todayWeightKg || 0) + ' Kg'"></h3>
+                                </div>
+                            </div>
+                            <div class="bg-white dark:bg-slate-800 p-6 rounded-2xl shadow-md border space-y-4">
+                                <div class="flex justify-between items-center">
+                                    <h3 class="text-xl font-bold">Live Map Operasional & Armada</h3>
+                                    <button @click="loadAdminData()" class="px-3 py-1 bg-slate-200 dark:bg-slate-700 text-xs font-bold rounded-xl"><i class="fa-solid fa-rotate mr-1"></i> Reload</button>
+                                </div>
+                                <div id="adminMap" class="w-full h-[450px] rounded-xl border"></div>
+                            </div>
+                        </div>
+                    </template>
+
+                    <!-- Admin Tab 2: Seluruh Laporan -->
+                    <template x-if="adminTab === 'laporan'">
+                        <div class="bg-white dark:bg-slate-800 p-6 rounded-3xl shadow-md border space-y-4">
+                            <div class="flex justify-between items-center">
+                                <h3 class="text-xl font-bold">Daftar Seluruh Laporan Sampah</h3>
+                                <button @click="loadAdminData()" class="px-3 py-1 bg-slate-200 dark:bg-slate-700 text-xs font-bold rounded-xl"><i class="fa-solid fa-rotate mr-1"></i> Reload</button>
+                            </div>
+                            <div class="overflow-x-auto">
+                                <table class="w-full text-left text-sm">
+                                    <thead>
+                                        <tr class="border-b dark:border-slate-700 text-xs text-slate-400 uppercase">
+                                            <th class="py-3 px-4">ID Laporan</th>
+                                            <th class="py-3 px-4">Alamat</th>
+                                            <th class="py-3 px-4">Jenis / Volume (Kg)</th>
+                                            <th class="py-3 px-4">Status</th>
+                                            <th class="py-3 px-4">Prioritas</th>
+                                            <th class="py-3 px-4">Aksi</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody class="divide-y dark:divide-slate-700">
+                                        <template x-for="rep in adminData.reports" :key="rep.reportId">
+                                            <tr>
+                                                <td class="py-3 px-4 font-mono text-xs" x-text="rep.reportId"></td>
+                                                <td class="py-3 px-4 font-semibold" x-text="rep.address"></td>
+                                                <td class="py-3 px-4 text-xs" x-text="rep.trashType + ' (' + rep.volumeKg + ' Kg)'"></td>
+                                                <td class="py-3 px-4"><span class="px-2 py-1 bg-primary-100 text-primary-800 text-[10px] font-bold rounded-lg" x-text="rep.status"></span></td>
+                                                <td class="py-3 px-4">
+                                                    <select @change="updatePriority(rep.reportId, $event.target.value)" class="text-xs px-2 py-1 rounded border bg-slate-50 dark:bg-slate-900">
+                                                        <option value="NORMAL" :selected="rep.priority === 'NORMAL'">NORMAL</option>
+                                                        <option value="SEDANG" :selected="rep.priority === 'SEDANG'">SEDANG</option>
+                                                        <option value="TINGGI" :selected="rep.priority === 'TINGGI'">TINGGI</option>
+                                                        <option value="DARURAT" :selected="rep.priority === 'DARURAT'">DARURAT</option>
+                                                    </select>
+                                                </td>
+                                                <td class="py-3 px-4"><a :href="rep.photoUrl" target="_blank" class="text-xs text-primary-600 underline font-bold">Lihat Foto</a></td>
+                                            </tr>
+                                        </template>
+                                        <template x-if="!adminData.reports || adminData.reports.length === 0">
+                                            <tr><td colspan="6" class="py-6 text-center text-slate-400">Belum ada data laporan.</td></tr>
+                                        </template>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </template>
+
+                    <!-- Admin Tab 3: Kelola Warga -->
+                    <template x-if="adminTab === 'warga'">
+                        <div class="bg-white dark:bg-slate-800 p-6 rounded-3xl shadow-md border space-y-4">
+                            <div class="flex justify-between items-center">
+                                <h3 class="text-xl font-bold">Manajemen Data Warga</h3>
+                                <div class="flex space-x-2">
+                                    <button @click="loadAdminData()" class="px-3 py-1 bg-slate-200 dark:bg-slate-700 text-xs font-bold rounded-xl"><i class="fa-solid fa-rotate mr-1"></i> Reload</button>
+                                    <button @click="openCitizenModal()" class="px-4 py-2 bg-primary-600 text-white text-xs font-bold rounded-xl shadow">+ Tambah Warga</button>
+                                </div>
+                            </div>
+                            <div class="overflow-x-auto">
+                                <table class="w-full text-left text-sm">
+                                    <thead>
+                                        <tr class="border-b dark:border-slate-700 text-xs text-slate-400 uppercase">
+                                            <th class="py-3 px-4">ID Warga</th>
+                                            <th class="py-3 px-4">Nama & Kontak</th>
+                                            <th class="py-3 px-4">Wilayah</th>
+                                            <th class="py-3 px-4">Aksi</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody class="divide-y dark:divide-slate-700">
+                                        <template x-for="cit in adminData.citizens" :key="cit.citizenId">
+                                            <tr>
+                                                <td class="py-3 px-4 font-mono font-bold text-primary-600" x-text="cit.citizenId"></td>
+                                                <td class="py-3 px-4">
+                                                    <div class="font-bold" x-text="cit.name"></div>
+                                                    <div class="text-xs text-slate-500" x-text="cit.email + ' | ' + cit.phone"></div>
+                                                </td>
+                                                <td class="py-3 px-4 text-xs" x-text="cit.village + ', ' + cit.district"></td>
+                                                <td class="py-3 px-4">
+                                                    <button @click="deleteCitizen(cit.citizenId)" class="px-3 py-1 bg-red-600 text-white text-xs font-bold rounded-lg shadow">Hapus</button>
+                                                </td>
+                                            </tr>
+                                        </template>
+                                        <template x-if="!adminData.citizens || adminData.citizens.length === 0">
+                                            <tr><td colspan="4" class="py-6 text-center text-slate-400">Belum ada data warga.</td></tr>
+                                        </template>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </template>
+
+                    <!-- Admin Tab 4: Kelola Petugas -->
+                    <template x-if="adminTab === 'petugas'">
+                        <div class="bg-white dark:bg-slate-800 p-6 rounded-3xl shadow-md border space-y-4">
+                            <div class="flex justify-between items-center">
+                                <h3 class="text-xl font-bold">Manajemen Petugas Lapangan</h3>
+                                <div class="flex space-x-2">
+                                    <button @click="loadAdminData()" class="px-3 py-1 bg-slate-200 dark:bg-slate-700 text-xs font-bold rounded-xl"><i class="fa-solid fa-rotate mr-1"></i> Reload</button>
+                                    <button @click="openWorkerModal()" class="px-4 py-2 bg-primary-600 text-white text-xs font-bold rounded-xl shadow">+ Tambah Petugas</button>
+                                </div>
+                            </div>
+                            <div class="overflow-x-auto">
+                                <table class="w-full text-left text-sm">
+                                    <thead>
+                                        <tr class="border-b dark:border-slate-700 text-xs text-slate-400 uppercase">
+                                            <th class="py-3 px-4">ID Petugas</th>
+                                            <th class="py-3 px-4">Nama</th>
+                                            <th class="py-3 px-4">Zona / Kendaraan</th>
+                                            <th class="py-3 px-4">Status</th>
+                                            <th class="py-3 px-4">Aksi</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody class="divide-y dark:divide-slate-700">
+                                        <template x-for="wk in adminData.workers" :key="wk.workerId">
+                                            <tr>
+                                                <td class="py-3 px-4 font-mono font-bold" x-text="wk.workerId"></td>
+                                                <td class="py-3 px-4 font-semibold" x-text="wk.name"></td>
+                                                <td class="py-3 px-4 text-xs" x-text="wk.zoneId + ' / ' + wk.vehicleId"></td>
+                                                <td class="py-3 px-4"><span class="px-2 py-1 bg-emerald-100 text-emerald-800 text-[10px] font-bold rounded-lg" x-text="wk.statusOnline"></span></td>
+                                                <td class="py-3 px-4">
+                                                    <button @click="deleteWorker(wk.workerId)" class="px-3 py-1 bg-red-600 text-white text-xs font-bold rounded-lg shadow">Hapus</button>
+                                                </td>
+                                            </tr>
+                                        </template>
+                                        <template x-if="!adminData.workers || adminData.workers.length === 0">
+                                            <tr><td colspan="5" class="py-6 text-center text-slate-400">Belum ada data petugas.</td></tr>
+                                        </template>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </template>
+
+                    <!-- Admin Tab 5: Kelola Zona -->
+                    <template x-if="adminTab === 'zona'">
+                        <div class="bg-white dark:bg-slate-800 p-6 rounded-3xl shadow-md border space-y-4">
+                            <div class="flex justify-between items-center">
+                                <h3 class="text-xl font-bold">Manajemen Zona Operasional</h3>
+                                <div class="flex space-x-2">
+                                    <button @click="loadAdminData()" class="px-3 py-1 bg-slate-200 dark:bg-slate-700 text-xs font-bold rounded-xl"><i class="fa-solid fa-rotate mr-1"></i> Reload</button>
+                                    <button @click="openZoneModal()" class="px-4 py-2 bg-primary-600 text-white text-xs font-bold rounded-xl shadow">+ Tambah Zona</button>
+                                </div>
+                            </div>
+                            <div class="grid sm:grid-cols-2 gap-4">
+                                <template x-for="z in adminData.zones" :key="z.zoneId">
+                                    <div class="p-4 rounded-2xl border bg-slate-50 dark:bg-slate-900 flex justify-between items-center shadow-sm">
+                                        <div>
+                                            <span class="text-xs font-bold text-primary-600" x-text="z.zoneId"></span>
+                                            <h4 class="font-bold text-base" x-text="z.zoneName"></h4>
+                                            <p class="text-xs text-slate-500" x-text="z.region + ' (' + z.village + ')'"></p>
+                                        </div>
+                                        <button @click="deleteZone(z.zoneId)" class="px-3 py-1 bg-red-600 text-white text-xs font-bold rounded-lg shadow">Hapus</button>
+                                    </div>
+                                </template>
+                                <template x-if="!adminData.zones || adminData.zones.length === 0">
+                                    <p class="text-slate-400 text-center col-span-2 py-6">Belum ada zona.</p>
+                                </template>
+                            </div>
+                        </div>
+                    </template>
+
+                    <!-- Admin Tab 6: Kendaraan -->
+                    <template x-if="adminTab === 'kendaraan'">
+                        <div class="bg-white dark:bg-slate-800 p-6 rounded-3xl shadow-md border space-y-4">
+                            <div class="flex justify-between items-center">
+                                <h3 class="text-xl font-bold">Manajemen Armada Kendaraan</h3>
+                                <div class="flex space-x-2">
+                                    <button @click="loadAdminData()" class="px-3 py-1 bg-slate-200 dark:bg-slate-700 text-xs font-bold rounded-xl"><i class="fa-solid fa-rotate mr-1"></i> Reload</button>
+                                    <button @click="openVehicleModal()" class="px-4 py-2 bg-primary-600 text-white text-xs font-bold rounded-xl shadow">+ Tambah Kendaraan</button>
+                                </div>
+                            </div>
+                            <div class="grid sm:grid-cols-2 gap-4">
+                                <template x-for="v in adminData.vehicles" :key="v.vehicleId">
+                                    <div class="p-4 rounded-2xl border bg-slate-50 dark:bg-slate-900 flex justify-between items-center shadow-sm">
+                                        <div>
+                                            <span class="text-xs font-bold text-primary-600" x-text="v.vehicleId"></span>
+                                            <h4 class="font-bold text-base" x-text="v.type + ' (' + v.platNumber + ')'"></h4>
+                                            <p class="text-xs text-slate-500">Kapasitas Maks: <span x-text="v.maxCapKg"></span> Kg</p>
+                                        </div>
+                                        <button @click="deleteVehicle(v.vehicleId)" class="px-3 py-1 bg-red-600 text-white text-xs font-bold rounded-lg shadow">Hapus</button>
+                                    </div>
+                                </template>
+                                <template x-if="!adminData.vehicles || adminData.vehicles.length === 0">
+                                    <p class="text-slate-400 text-center col-span-2 py-6">Belum ada kendaraan.</p>
+                                </template>
+                            </div>
+                        </div>
+                    </template>
+
+                    <!-- Admin Tab 7: TPS -->
+                    <template x-if="adminTab === 'tps'">
+                        <div class="bg-white dark:bg-slate-800 p-6 rounded-3xl shadow-md border space-y-4">
+                            <div class="flex justify-between items-center">
+                                <h3 class="text-xl font-bold">Manajemen TPS</h3>
+                                <div class="flex space-x-2">
+                                    <button @click="loadAdminData()" class="px-3 py-1 bg-slate-200 dark:bg-slate-700 text-xs font-bold rounded-xl"><i class="fa-solid fa-rotate mr-1"></i> Reload</button>
+                                    <button @click="openTpsModal()" class="px-4 py-2 bg-primary-600 text-white text-xs font-bold rounded-xl shadow">+ Tambah TPS</button>
+                                </div>
+                            </div>
+                            <div class="grid sm:grid-cols-2 gap-4">
+                                <template x-for="t in adminData.tps" :key="t.tpsId">
+                                    <div class="p-4 rounded-2xl border bg-slate-50 dark:bg-slate-900 flex justify-between items-center shadow-sm">
+                                        <div>
+                                            <span class="text-xs font-bold text-primary-600" x-text="t.tpsId"></span>
+                                            <h4 class="font-bold text-base" x-text="t.name"></h4>
+                                            <p class="text-xs text-slate-500" x-text="t.address"></p>
+                                        </div>
+                                        <button @click="deleteTps(t.tpsId)" class="px-3 py-1 bg-red-600 text-white text-xs font-bold rounded-lg shadow">Hapus</button>
+                                    </div>
+                                </template>
+                                <template x-if="!adminData.tps || adminData.tps.length === 0">
+                                    <p class="text-slate-400 text-center col-span-2 py-6">Belum ada data TPS.</p>
+                                </template>
+                            </div>
+                        </div>
+                    </template>
+
+                    <!-- Admin Tab 8: Penugasan -->
+                    <template x-if="adminTab === 'penugasan'">
+                        <div class="bg-white dark:bg-slate-800 p-6 rounded-3xl shadow-md border space-y-4">
+                            <div class="flex justify-between items-center">
+                                <h3 class="text-xl font-bold">Atur Penugasan Manual Laporan ke Petugas</h3>
+                                <button @click="loadAdminData()" class="px-3 py-1 bg-slate-200 dark:bg-slate-700 text-xs font-bold rounded-xl"><i class="fa-solid fa-rotate mr-1"></i> Reload</button>
+                            </div>
+                            <div class="space-y-3">
+                                <template x-for="rep in adminData.reports" :key="rep.reportId">
+                                    <div class="p-4 rounded-2xl border bg-slate-50 dark:bg-slate-900 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                                        <div>
+                                            <span class="text-xs font-bold text-primary-600" x-text="rep.reportId"></span>
+                                            <h4 class="font-bold text-sm" x-text="rep.address"></h4>
+                                            <p class="text-xs text-slate-500">Status: <span x-text="rep.status"></span> | Volume: <span x-text="rep.volumeKg"></span> Kg</p>
+                                        </div>
+                                        <button @click="manualAssignPrompt(rep.reportId)" class="px-4 py-2 bg-primary-600 text-white text-xs font-bold rounded-xl shadow">Tugaskan ke Petugas</button>
+                                    </div>
+                                </template>
+                                <template x-if="!adminData.reports || adminData.reports.length === 0">
+                                    <p class="text-slate-400 text-center py-6">Tidak ada laporan untuk ditugaskan.</p>
+                                </template>
+                            </div>
+                        </div>
+                    </template>
+
+                    <!-- Admin Tab 9: Statistik -->
+                    <template x-if="adminTab === 'statistik'">
+                        <div class="bg-white dark:bg-slate-800 p-6 rounded-3xl shadow-md border space-y-6">
+                            <div class="flex justify-between items-center">
+                                <h3 class="text-xl font-bold">Statistik & Agregasi Operasional</h3>
+                                <button @click="loadAdminData()" class="px-3 py-1 bg-slate-200 dark:bg-slate-700 text-xs font-bold rounded-xl"><i class="fa-solid fa-rotate mr-1"></i> Reload</button>
+                            </div>
+                            <div class="grid md:grid-cols-2 gap-6">
+                                <div class="p-4 rounded-2xl border bg-slate-50 dark:bg-slate-900"><canvas id="adminCatChart"></canvas></div>
+                                <div class="p-4 rounded-2xl border bg-slate-50 dark:bg-slate-900"><canvas id="adminTrendChart"></canvas></div>
+                            </div>
+                        </div>
+                    </template>
+
+                    <!-- Admin Tab 10: Log Aktivitas -->
+                    <template x-if="adminTab === 'logs'">
+                        <div class="bg-white dark:bg-slate-800 p-6 rounded-3xl shadow-md border space-y-4">
+                            <div class="flex justify-between items-center">
+                                <h3 class="text-xl font-bold">Log Aktivitas Sistem Terbaru</h3>
+                                <button @click="loadAdminData()" class="px-3 py-1 bg-slate-200 dark:bg-slate-700 text-xs font-bold rounded-xl"><i class="fa-solid fa-rotate mr-1"></i> Reload</button>
+                            </div>
+                            <div class="space-y-2 max-h-[450px] overflow-y-auto text-xs">
+                                <template x-for="log in adminData.logs" :key="log.logId">
+                                    <div class="p-3 bg-slate-50 dark:bg-slate-900 rounded-xl border flex justify-between items-center">
+                                        <div>
+                                            <strong class="text-primary-600" x-text="log.action"></strong>
+                                            <p class="text-slate-500" x-text="log.detail"></p>
+                                        </div>
+                                        <span class="text-[10px] text-slate-400" x-text="log.timestamp"></span>
+                                    </div>
+                                </template>
+                                <template x-if="!adminData.logs || adminData.logs.length === 0">
+                                    <p class="text-slate-400 text-center py-6">Belum ada log aktivitas.</p>
+                                </template>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+            </template>
+        </main>
+
+        <!-- PROFESSIONAL ALPINE MODALS -->
+        <template x-if="modalActive">
+            <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+                <div class="bg-white dark:bg-slate-800 w-full max-w-lg p-6 rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-700 space-y-4">
+                    <h3 class="text-xl font-black" x-text="modalTitle"></h3>
+                    
+                    <!-- Citizen Modal Form -->
+                    <template x-if="modalType === 'citizen'">
+                        <form @submit.prevent="saveCitizenSubmit()" class="space-y-3">
+                            <div>
+                                <label class="text-xs text-slate-500 block mb-1">Nama Lengkap</label>
+                                <input type="text" x-model="modalForm.name" required class="w-full px-4 py-2.5 rounded-xl border bg-slate-50 dark:bg-slate-900 border-slate-300 dark:border-slate-600 text-sm">
+                            </div>
+                            <div>
+                                <label class="text-xs text-slate-500 block mb-1">Email</label>
+                                <input type="email" x-model="modalForm.email" required class="w-full px-4 py-2.5 rounded-xl border bg-slate-50 dark:bg-slate-900 border-slate-300 dark:border-slate-600 text-sm">
+                            </div>
+                            <div>
+                                <label class="text-xs text-slate-500 block mb-1">No HP</label>
+                                <input type="text" x-model="modalForm.phone" required class="w-full px-4 py-2.5 rounded-xl border bg-slate-50 dark:bg-slate-900 border-slate-300 dark:border-slate-600 text-sm">
+                            </div>
+                            <div>
+                                <label class="text-xs text-slate-500 block mb-1">Alamat</label>
+                                <textarea x-model="modalForm.address" required class="w-full px-4 py-2.5 rounded-xl border bg-slate-50 dark:bg-slate-900 border-slate-300 dark:border-slate-600 text-sm"></textarea>
+                            </div>
+                            <div class="flex justify-end space-x-2 pt-2">
+                                <button type="button" @click="modalActive = false" class="px-4 py-2 bg-slate-200 dark:bg-slate-700 text-xs font-bold rounded-xl">Batal</button>
+                                <button type="submit" class="px-4 py-2 bg-primary-600 text-white text-xs font-bold rounded-xl shadow">Simpan Warga</button>
+                            </div>
+                        </form>
+                    </template>
+
+                    <!-- Worker Modal Form -->
+                    <template x-if="modalType === 'worker'">
+                        <form @submit.prevent="saveWorkerSubmit()" class="space-y-3">
+                            <div>
+                                <label class="text-xs text-slate-500 block mb-1">Nama Petugas</label>
+                                <input type="text" x-model="modalForm.name" required class="w-full px-4 py-2.5 rounded-xl border bg-slate-50 dark:bg-slate-900 border-slate-300 dark:border-slate-600 text-sm">
+                            </div>
+                            <div>
+                                <label class="text-xs text-slate-500 block mb-1">Email</label>
+                                <input type="email" x-model="modalForm.email" required class="w-full px-4 py-2.5 rounded-xl border bg-slate-50 dark:bg-slate-900 border-slate-300 dark:border-slate-600 text-sm">
+                            </div>
+                            <div>
+                                <label class="text-xs text-slate-500 block mb-1">No HP</label>
+                                <input type="text" x-model="modalForm.phone" required class="w-full px-4 py-2.5 rounded-xl border bg-slate-50 dark:bg-slate-900 border-slate-300 dark:border-slate-600 text-sm">
+                            </div>
+                            <div class="grid grid-cols-2 gap-2">
+                                <div>
+                                    <label class="text-xs text-slate-500 block mb-1">ID Zona</label>
+                                    <input type="text" x-model="modalForm.zoneId" placeholder="Z01" required class="w-full px-3 py-2 rounded-xl border bg-slate-50 dark:bg-slate-900 border-slate-300 dark:border-slate-600 text-sm">
+                                </div>
+                                <div>
+                                    <label class="text-xs text-slate-500 block mb-1">ID Kendaraan</label>
+                                    <input type="text" x-model="modalForm.vehicleId" placeholder="V01" required class="w-full px-3 py-2 rounded-xl border bg-slate-50 dark:bg-slate-900 border-slate-300 dark:border-slate-600 text-sm">
+                                </div>
+                            </div>
+                            <div class="flex justify-end space-x-2 pt-2">
+                                <button type="button" @click="modalActive = false" class="px-4 py-2 bg-slate-200 dark:bg-slate-700 text-xs font-bold rounded-xl">Batal</button>
+                                <button type="submit" class="px-4 py-2 bg-primary-600 text-white text-xs font-bold rounded-xl shadow">Simpan Petugas</button>
+                            </div>
+                        </form>
+                    </template>
+
+                    <!-- Zone Modal Form -->
+                    <template x-if="modalType === 'zone'">
+                        <form @submit.prevent="saveZoneSubmit()" class="space-y-3">
+                            <div>
+                                <label class="text-xs text-slate-500 block mb-1">Nama Zona</label>
+                                <input type="text" x-model="modalForm.zoneName" placeholder="Zona 01" required class="w-full px-4 py-2.5 rounded-xl border bg-slate-50 dark:bg-slate-900 border-slate-300 dark:border-slate-600 text-sm">
+                            </div>
+                            <div>
+                                <label class="text-xs text-slate-500 block mb-1">Wilayah / Region</label>
+                                <input type="text" x-model="modalForm.region" placeholder="Pusat Kota" required class="w-full px-4 py-2.5 rounded-xl border bg-slate-50 dark:bg-slate-900 border-slate-300 dark:border-slate-600 text-sm">
+                            </div>
+                            <div class="flex justify-end space-x-2 pt-2">
+                                <button type="button" @click="modalActive = false" class="px-4 py-2 bg-slate-200 dark:bg-slate-700 text-xs font-bold rounded-xl">Batal</button>
+                                <button type="submit" class="px-4 py-2 bg-primary-600 text-white text-xs font-bold rounded-xl shadow">Simpan Zona</button>
+                            </div>
+                        </form>
+                    </template>
+
+                    <!-- Vehicle Modal Form -->
+                    <template x-if="modalType === 'vehicle'">
+                        <form @submit.prevent="saveVehicleSubmit()" class="space-y-3">
+                            <div>
+                                <label class="text-xs text-slate-500 block mb-1">Jenis Kendaraan</label>
+                                <input type="text" x-model="modalForm.type" placeholder="Truk Besar" required class="w-full px-4 py-2.5 rounded-xl border bg-slate-50 dark:bg-slate-900 border-slate-300 dark:border-slate-600 text-sm">
+                            </div>
+                            <div>
+                                <label class="text-xs text-slate-500 block mb-1">Plat Nomor</label>
+                                <input type="text" x-model="modalForm.platNumber" placeholder="B 1234 ABC" required class="w-full px-4 py-2.5 rounded-xl border bg-slate-50 dark:bg-slate-900 border-slate-300 dark:border-slate-600 text-sm">
+                            </div>
+                            <div>
+                                <label class="text-xs text-slate-500 block mb-1">Kapasitas Maksimum (Kg)</label>
+                                <input type="number" x-model="modalForm.maxCapKg" placeholder="1000" required class="w-full px-4 py-2.5 rounded-xl border bg-slate-50 dark:bg-slate-900 border-slate-300 dark:border-slate-600 text-sm">
+                            </div>
+                            <div class="flex justify-end space-x-2 pt-2">
+                                <button type="button" @click="modalActive = false" class="px-4 py-2 bg-slate-200 dark:bg-slate-700 text-xs font-bold rounded-xl">Batal</button>
+                                <button type="submit" class="px-4 py-2 bg-primary-600 text-white text-xs font-bold rounded-xl shadow">Simpan Kendaraan</button>
+                            </div>
+                        </form>
+                    </template>
+
+                    <!-- TPS Modal Form -->
+                    <template x-if="modalType === 'tps'">
+                        <form @submit.prevent="saveTpsSubmit()" class="space-y-3">
+                            <div>
+                                <label class="text-xs text-slate-500 block mb-1">Nama TPS</label>
+                                <input type="text" x-model="modalForm.name" placeholder="TPS Menteng" required class="w-full px-4 py-2.5 rounded-xl border bg-slate-50 dark:bg-slate-900 border-slate-300 dark:border-slate-600 text-sm">
+                            </div>
+                            <div>
+                                <label class="text-xs text-slate-500 block mb-1">Alamat</label>
+                                <textarea x-model="modalForm.address" placeholder="Jl. Latuharhary" required class="w-full px-4 py-2.5 rounded-xl border bg-slate-50 dark:bg-slate-900 border-slate-300 dark:border-slate-600 text-sm"></textarea>
+                            </div>
+                            <div class="flex justify-end space-x-2 pt-2">
+                                <button type="button" @click="modalActive = false" class="px-4 py-2 bg-slate-200 dark:bg-slate-700 text-xs font-bold rounded-xl">Batal</button>
+                                <button type="submit" class="px-4 py-2 bg-primary-600 text-white text-xs font-bold rounded-xl shadow">Simpan TPS</button>
+                            </div>
+                        </form>
+                    </template>
+
+                    <!-- Manual Assign Modal -->
+                    <template x-if="modalType === 'assign'">
+                        <form @submit.prevent="saveAssignSubmit()" class="space-y-3">
+                            <div>
+                                <label class="text-xs text-slate-500 block mb-1">ID Laporan: <strong x-text="modalForm.reportId"></strong></label>
+                            </div>
+                            <div>
+                                <label class="text-xs text-slate-500 block mb-1">ID Petugas Tujuan (Contoh: W01)</label>
+                                <input type="text" x-model="modalForm.workerId" placeholder="W01" required class="w-full px-4 py-2.5 rounded-xl border bg-slate-50 dark:bg-slate-900 border-slate-300 dark:border-slate-600 text-sm">
+                            </div>
+                            <div class="flex justify-end space-x-2 pt-2">
+                                <button type="button" @click="modalActive = false" class="px-4 py-2 bg-slate-200 dark:bg-slate-700 text-xs font-bold rounded-xl">Batal</button>
+                                <button type="submit" class="px-4 py-2 bg-primary-600 text-white text-xs font-bold rounded-xl shadow">Tugaskan</button>
+                            </div>
+                        </form>
+                    </template>
+                </div>
+            </div>
+        </template>
+
+        <footer class="bg-white dark:bg-slate-800 border-t py-6 text-center text-xs text-slate-500">
+            &copy; 2026 SIPAS - Sistem Pengangkutan Sampah Terpadu
+        </footer>
+    </div>
+
+    <script>
+        function appData() {
+            return {
+                darkMode: false,
+                currentView: 'public',
+                adminTab: 'dashboard',
+                currentUser: null,
+                loginForm: { email: '', password: '' },
+                regForm: { name: '', phone: '', email: '', password: '', nik: '', address: '', village: 'Menteng', district: 'Menteng', rt: '01', rw: '01', lat: -6.19, lng: 106.82 },
+                citizenReports: [],
+                workerTasks: [],
+                workerVehicle: { type: 'Truk Besar', maxCapKg: 1000, filledCapKg: 250 },
+                workerStatus: 'ONLINE',
+                adminData: { metrics: {}, reports: [], citizens: [], workers: [], zones: [], vehicles: [], tps: [], logs: [] },
+                
+                modalActive: false,
+                modalTitle: '',
+                modalType: '',
+                modalForm: {},
+
+                initApp() {
+                    if (localStorage.getItem('sipas_dark') === 'true') {
+                        this.darkMode = true;
+                        document.documentElement.classList.add('dark');
+                    }
+                    const savedUser = localStorage.getItem('sipas_user');
+                    if (savedUser) {
+                        try {
+                            this.currentUser = JSON.parse(savedUser);
+                            this.routeUserView();
+                        } catch (e) {
+                            localStorage.removeItem('sipas_user');
+                        }
+                    }
+                },
+
+                toggleDarkMode() {
+                    this.darkMode = !this.darkMode;
+                    localStorage.setItem('sipas_dark', this.darkMode);
+                    document.documentElement.classList.toggle('dark', this.darkMode);
+                },
+
+                routeUserView() {
+                    if (!this.currentUser) {
+                        this.currentView = 'public';
+                        return;
+                    }
+                    if (this.currentUser.role === 'ADMIN') {
+                        this.currentView = 'admin_dashboard';
+                        this.loadAdminData();
+                    } else if (this.currentUser.role === 'WARGA') {
+                        this.currentView = 'citizen_dashboard';
+                        this.loadCitizenData();
+                    } else if (this.currentUser.role === 'PETUGAS') {
+                        this.currentView = 'worker_dashboard';
+                        this.loadWorkerData();
+                    }
+                },
+
+                submitLogin() {
+                    Swal.fire({ title: 'Memproses Masuk...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+                    google.script.run
+                        .withSuccessHandler(res => {
+                            Swal.close();
+                            if (res.success) {
+                                this.currentUser = res.user;
+                                localStorage.setItem('sipas_user', JSON.stringify(res.user));
+                                this.routeUserView();
+                                Swal.fire('Berhasil', 'Selamat datang, ' + res.user.name, 'success');
+                            } else {
+                                Swal.fire('Gagal', res.message, 'error');
+                            }
+                        })
+                        .withFailureHandler(err => {
+                            Swal.close();
+                            Swal.fire('Error', err.message || 'Gagal terhubung ke backend', 'error');
+                        })
+                        .loginUser(this.loginForm.email, this.loginForm.password);
+                },
+
+                submitRegister() {
+                    Swal.fire({ title: 'Mendaftarkan Warga...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+                    google.script.run
+                        .withSuccessHandler(res => {
+                            Swal.close();
+                            if (res.success) {
+                                Swal.fire('Berhasil', res.message, 'success');
+                                this.currentView = 'login';
+                            } else {
+                                Swal.fire('Gagal', res.message, 'error');
+                            }
+                        })
+                        .withFailureHandler(err => {
+                            Swal.close();
+                            Swal.fire('Error', err.message || 'Gagal terhubung ke backend', 'error');
+                        })
+                        .registerCitizen(this.regForm);
+                },
+
+                logout() {
+                    localStorage.removeItem('sipas_user');
+                    this.currentUser = null;
+                    this.currentView = 'public';
+                    Swal.fire('Keluar', 'Sesi Anda telah diakhiri dan cache dibersihkan.', 'info');
+                },
+
+                loadCitizenData() {
+                    google.script.run
+                        .withSuccessHandler(res => {
+                            if (res.success) this.citizenReports = res.reports;
+                        })
+                        .withFailureHandler(err => Swal.fire('Error', err.message || 'Gagal memuat data', 'error'))
+                        .getCitizenData(this.currentUser.citizenId);
+                },
+
+                openReportModal() {
+                    Swal.fire({
+                        title: 'Lapor Tumpukan Sampah',
+                        html: '<select id="swalTrashType" class="swal2-input">' +
+                              '<option value="Rumah Tangga">Rumah Tangga</option>' +
+                              '<option value="Organik">Organik</option>' +
+                              '<option value="Anorganik">Anorganik</option>' +
+                              '<option value="Campuran">Campuran</option></select>' +
+                              '<input type="number" id="swalVolumeKg" class="swal2-input" placeholder="Volume (Kg) Misal: 30" min="1" value="30">' +
+                              '<input id="swalAddress" class="swal2-input" placeholder="Alamat / Patokan Lokasi">' +
+                              '<textarea id="swalNotes" class="swal2-textarea" placeholder="Catatan tambahan..."></textarea>' +
+                              '<input type="file" id="swalPhoto" accept="image/*" capture="environment" class="swal2-file mt-2">',
+                        confirmButtonText: 'Kirim Laporan',
+                        preConfirm: () => {
+                            const fileInput = document.getElementById('swalPhoto');
+                            const trashType = document.getElementById('swalTrashType').value;
+                            const volumeKg = document.getElementById('swalVolumeKg').value;
+                            const address = document.getElementById('swalAddress').value;
+                            const notes = document.getElementById('swalNotes').value;
+
+                            if (!fileInput.files || fileInput.files.length === 0) {
+                                Swal.showValidationMessage('Foto wajib diambil dari kamera!');
+                                return false;
+                            }
+
+                            return new Promise((resolve) => {
+                                const reader = new FileReader();
+                                reader.onload = (e) => resolve({
+                                    citizenId: this.currentUser.citizenId,
+                                    trashType, volumeKg: Number(volumeKg || 30), address, notes,
+                                    photoBase64: e.target.result,
+                                    lat: -6.19, lng: 106.82
+                                });
+                                reader.readAsDataURL(fileInput.files[0]);
+                            });
+                        }
+                    }).then(res => {
+                        if (res.isConfirmed && res.value) {
+                            Swal.fire({ title: 'Mengirim Laporan...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+                            google.script.run
+                                .withSuccessHandler(r => {
+                                    Swal.fire('Berhasil', r.message, 'success');
+                                    this.loadCitizenData();
+                                })
+                                .withFailureHandler(err => Swal.fire('Error', err.message || 'Gagal mengirim laporan', 'error'))
+                                .submitCitizenReport(res.value);
+                        }
+                    });
+                },
+
+                openRatingModal(reportId) {
+                    Swal.fire({
+                        title: 'Beri Rating Pelayanan',
+                        html: '<select id="swalStars" class="swal2-input"><option value="5">⭐⭐⭐⭐⭐ (Sangat Baik)</option><option value="4">⭐⭐⭐⭐ (Baik)</option><option value="3">⭐⭐⭐ (Cukup)</option></select>' +
+                              '<input id="swalComment" class="swal2-input" placeholder="Ulasan opsional">',
+                        confirmButtonText: 'Kirim Rating',
+                        preConfirm: () => ({
+                            rating: document.getElementById('swalStars').value,
+                            comment: document.getElementById('swalComment').value
+                        })
+                    }).then(res => {
+                        if (res.isConfirmed) {
+                            google.script.run
+                                .withSuccessHandler(r => {
+                                    Swal.fire('Terima Kasih', r.message, 'success');
+                                })
+                                .withFailureHandler(err => Swal.fire('Error', err.message || 'Gagal mengirim rating', 'error'))
+                                .submitRating(reportId, res.value.rating, res.value.comment);
+                        }
+                    });
+                },
+
+                loadWorkerData() {
+                    google.script.run
+                        .withSuccessHandler(res => {
+                            if (res.success) {
+                                this.workerTasks = res.tasks;
+                                this.workerVehicle = res.vehicle;
+                            }
+                        })
+                        .withFailureHandler(err => Swal.fire('Error', err.message || 'Gagal memuat tugas', 'error'))
+                        .getWorkerData(this.currentUser.workerId);
+                },
+
+                toggleOnlineStatus() {
+                    this.workerStatus = this.workerStatus === 'ONLINE' ? 'OFFLINE' : 'ONLINE';
+                    Swal.fire('Status Diubah', 'Status Anda sekarang: ' + this.workerStatus, 'info');
+                },
+
+                workerAction(taskId, action) {
+                    google.script.run
+                        .withSuccessHandler(res => {
+                            Swal.fire('Sukses', res.message, 'success');
+                            this.loadWorkerData();
+                        })
+                        .withFailureHandler(err => Swal.fire('Error', err.message || 'Gagal memproses aksi', 'error'))
+                        .workerActionTask(taskId, action, {});
+                },
+
+                openCompleteModal(taskId) {
+                    Swal.fire({
+                        title: 'Selesaikan Tugas & Bukti Foto',
+                        html: '<input type="number" id="swalActualVolKg" class="swal2-input" placeholder="Volume Aktual Terangkut (Kg)" min="1" value="30">' +
+                              '<input type="file" id="swalProof" accept="image/*" capture="environment" class="swal2-file mt-2">',
+                        confirmButtonText: 'Selesaikan Tugas',
+                        preConfirm: () => {
+                            const fileInput = document.getElementById('swalProof');
+                            const actualVolumeKg = document.getElementById('swalActualVolKg').value;
+                            if (!fileInput.files || fileInput.files.length === 0) {
+                                Swal.showValidationMessage('Foto bukti wajib diambil!');
+                                return false;
+                            }
+                            return new Promise((resolve) => {
+                                const reader = new FileReader();
+                                reader.onload = (e) => resolve({
+                                    actualVolumeKg: Number(actualVolumeKg || 30), proofPhotoUrl: e.target.result
+                                });
+                                reader.readAsDataURL(fileInput.files[0]);
+                            });
+                        }
+                    }).then(res => {
+                        if (res.isConfirmed && res.value) {
+                            google.script.run
+                                .withSuccessHandler(r => {
+                                    Swal.fire('Selesai', r.message, 'success');
+                                    this.loadWorkerData();
+                                })
+                                .withFailureHandler(err => Swal.fire('Error', err.message || 'Gagal menyelesaikan tugas', 'error'))
+                                .workerActionTask(taskId, 'SELESAI', res.value);
+                        }
+                    });
+                },
+
+                emptyVehicle() {
+                    google.script.run
+                        .withSuccessHandler(res => {
+                            Swal.fire('Berhasil', res.message, 'success');
+                            this.loadWorkerData();
+                        })
+                        .withFailureHandler(err => Swal.fire('Error', err.message || 'Gagal mengosongkan kendaraan', 'error'))
+                        .emptyVehicle(this.workerVehicle.vehicleId);
+                },
+
+                loadAdminData() {
+                    Swal.fire({ title: 'Memuat Data dari Datasheet...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+                    google.script.run
+                        .withSuccessHandler(res => {
+                            Swal.close();
+                            if (res && res.success) {
+                                this.adminData = res;
+                                Swal.fire({ toast: true, position: 'top-end', icon: 'success', title: 'Data berhasil disinkronkan', showConfirmButton: false, timer: 1500 });
+                            } else {
+                                this.adminData = { metrics: {}, reports: [], citizens: [], workers: [], zones: [], vehicles: [], tps: [], logs: [] };
+                                Swal.fire('Perhatian', res.message || 'Data kosong atau belum diinisialisasi', 'warning');
+                            }
+                        })
+                        .withFailureHandler(err => {
+                            Swal.close();
+                            // Fallback mock data on failure
+                            this.adminData = {
+                                metrics: { citizensCount: 1, onlineWorkers: 1, totalReports: 1, completedReports: 0, todayWeightKg: 50 },
+                                reports: [{ reportId: 'RPT-001', citizenId: 'DRM-000001', trashType: 'Rumah Tangga', volumeKg: 50, address: 'Jl. Menteng No. 1', status: 'DITAWARKAN', priority: 'TINGGI', photoUrl: 'https://placehold.co/400' }],
+                                citizens: [{ citizenId: 'DRM-000001', userId: 'U011', name: 'Siti Aminah', email: 'warga1@sipas.id', phone: '081300000001', nik: '317101', address: 'Jl. Menteng No. 1', village: 'Menteng', district: 'Menteng', qrCodeUrl: 'https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=DRM-000001' }],
+                                workers: [{ workerId: 'W01', userId: 'U002', name: 'Budi Santoso', email: 'budi@sipas.id', phone: '081234567890', zoneId: 'Z01', vehicleId: 'V01', statusOnline: 'ONLINE' }],
+                                zones: [{ zoneId: 'Z01', zoneName: 'Zona 01', region: 'Pusat Kota', village: 'Menteng', district: 'Menteng' }],
+                                vehicles: [{ vehicleId: 'V01', type: 'Truk Besar', platNumber: 'B 1234 ABC', maxCapKg: 1000, filledCapKg: 250, status: 'AKTIF' }],
+                                tps: [{ tpsId: 'TPS01', name: 'TPS Menteng', address: 'Jl. Latuharhary' }],
+                                logs: [{ logId: 'LOG-1', userId: 'U001', action: 'LOGIN', detail: 'Admin logged in', timestamp: '2026-06-01 08:00' }]
+                            };
+                            Swal.fire('Info', 'Menggunakan data demo lokal.', 'info');
+                        })
+                        .getAdminDashboardData();
+
+                    setTimeout(() => {
+                        if (window.adminMapInstance) return;
+                        const map = L.map('adminMap').setView([-6.19, 106.82], 13);
+                        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+                        L.marker([-6.19, 106.82]).addTo(map).bindPopup('Pusat Operasional Zona 01');
+                        window.adminMapInstance = map;
+                    }, 400);
+                },
+
+                updatePriority(reportId, newPriority) {
+                    google.script.run
+                        .withSuccessHandler(res => {
+                            Swal.fire('Berhasil', res.message, 'success');
+                            this.loadAdminData();
+                        })
+                        .withFailureHandler(err => Swal.fire('Error', err.message || 'Gagal memperbarui prioritas', 'error'))
+                        .updateReportPriority(reportId, newPriority);
+                },
+
+                openCitizenModal() {
+                    this.modalTitle = 'Tambah Warga Baru';
+                    this.modalType = 'citizen';
+                    this.modalForm = { name: '', email: '', phone: '', address: '' };
+                    this.modalActive = true;
+                },
+
+                saveCitizenSubmit() {
+                    this.modalActive = false;
+                    Swal.fire({ title: 'Menyimpan...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+                    google.script.run
+                        .withSuccessHandler(r => {
+                            Swal.fire('Sukses', r.message, 'success');
+                            this.loadAdminData();
+                        })
+                        .withFailureHandler(err => Swal.fire('Error', err.message || 'Gagal menyimpan warga', 'error'))
+                        .saveCitizenAdmin(this.modalForm);
+                },
+
+                deleteCitizen(citizenId) {
+                    Swal.fire({ title: 'Hapus warga ini?', showCancelButton: true, confirmButtonText: 'Hapus' }).then(r => {
+                        if (r.isConfirmed) {
+                            google.script.run
+                                .withSuccessHandler(res => {
+                                    Swal.fire('Berhasil', res.message, 'success');
+                                    this.loadAdminData();
+                                })
+                                .withFailureHandler(err => Swal.fire('Error', err.message || 'Gagal menghapus warga', 'error'))
+                                .deleteCitizenAdmin(citizenId);
+                        }
+                    });
+                },
+
+                openWorkerModal() {
+                    this.modalTitle = 'Tambah Petugas Baru';
+                    this.modalType = 'worker';
+                    this.modalForm = { name: '', email: '', phone: '', zoneId: 'Z01', vehicleId: 'V01' };
+                    this.modalActive = true;
+                },
+
+                saveWorkerSubmit() {
+                    this.modalActive = false;
+                    Swal.fire({ title: 'Menyimpan...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+                    google.script.run
+                        .withSuccessHandler(r => {
+                            Swal.fire('Sukses', r.message, 'success');
+                            this.loadAdminData();
+                        })
+                        .withFailureHandler(err => Swal.fire('Error', err.message || 'Gagal menyimpan petugas', 'error'))
+                        .saveWorkerAdmin(this.modalForm);
+                },
+
+                deleteWorker(workerId) {
+                    Swal.fire({ title: 'Hapus petugas ini?', showCancelButton: true, confirmButtonText: 'Hapus' }).then(r => {
+                        if (r.isConfirmed) {
+                            google.script.run
+                                .withSuccessHandler(res => {
+                                    Swal.fire('Berhasil', res.message, 'success');
+                                    this.loadAdminData();
+                                })
+                                .withFailureHandler(err => Swal.fire('Error', err.message || 'Gagal menghapus petugas', 'error'))
+                                .deleteWorkerAdmin(workerId);
+                        }
+                    });
+                },
+
+                openZoneModal() {
+                    this.modalTitle = 'Tambah Zona Baru';
+                    this.modalType = 'zone';
+                    this.modalForm = { zoneName: '', region: '' };
+                    this.modalActive = true;
+                },
+
+                saveZoneSubmit() {
+                    this.modalActive = false;
+                    Swal.fire({ title: 'Menyimpan...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+                    google.script.run
+                        .withSuccessHandler(r => {
+                            Swal.fire('Sukses', r.message, 'success');
+                            this.loadAdminData();
+                        })
+                        .withFailureHandler(err => Swal.fire('Error', err.message || 'Gagal menyimpan zona', 'error'))
+                        .saveZoneAdmin(this.modalForm);
+                },
+
+                deleteZone(zoneId) {
+                    google.script.run
+                        .withSuccessHandler(res => {
+                            Swal.fire('Berhasil', res.message, 'success');
+                            this.loadAdminData();
+                        })
+                        .withFailureHandler(err => Swal.fire('Error', err.message || 'Gagal menghapus zona', 'error'))
+                        .deleteZoneAdmin(zoneId);
+                },
+
+                openVehicleModal() {
+                    this.modalTitle = 'Tambah Kendaraan';
+                    this.modalType = 'vehicle';
+                    this.modalForm = { type: '', platNumber: '', maxCapKg: 1000 };
+                    this.modalActive = true;
+                },
+
+                saveVehicleSubmit() {
+                    this.modalActive = false;
+                    Swal.fire({ title: 'Menyimpan...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+                    google.script.run
+                        .withSuccessHandler(r => {
+                            Swal.fire('Sukses', r.message, 'success');
+                            this.loadAdminData();
+                        })
+                        .withFailureHandler(err => Swal.fire('Error', err.message || 'Gagal menyimpan kendaraan', 'error'))
+                        .saveVehicleAdmin(this.modalForm);
+                },
+
+                deleteVehicle(vehicleId) {
+                    google.script.run
+                        .withSuccessHandler(res => {
+                            Swal.fire('Berhasil', res.message, 'success');
+                            this.loadAdminData();
+                        })
+                        .withFailureHandler(err => Swal.fire('Error', err.message || 'Gagal menghapus kendaraan', 'error'))
+                        .deleteVehicleAdmin(vehicleId);
+                },
+
+                openTpsModal() {
+                    this.modalTitle = 'Tambah TPS';
+                    this.modalType = 'tps';
+                    this.modalForm = { name: '', address: '' };
+                    this.modalActive = true;
+                },
+
+                saveTpsSubmit() {
+                    this.modalActive = false;
+                    Swal.fire({ title: 'Menyimpan...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+                    google.script.run
+                        .withSuccessHandler(r => {
+                            Swal.fire('Sukses', r.message, 'success');
+                            this.loadAdminData();
+                        })
+                        .withFailureHandler(err => Swal.fire('Error', err.message || 'Gagal menyimpan TPS', 'error'))
+                        .saveTpsAdmin(this.modalForm);
+                },
+
+                deleteTps(tpsId) {
+                    google.script.run
+                        .withSuccessHandler(res => {
+                            Swal.fire('Berhasil', res.message, 'success');
+                            this.loadAdminData();
+                        })
+                        .withFailureHandler(err => Swal.fire('Error', err.message || 'Gagal menghapus TPS', 'error'))
+                        .deleteTpsAdmin(tpsId);
+                },
+
+                manualAssignPrompt(reportId) {
+                    this.modalTitle = 'Tugaskan ke Petugas';
+                    this.modalType = 'assign';
+                    this.modalForm = { reportId: reportId, workerId: 'W01' };
+                    this.modalActive = true;
+                },
+
+                saveAssignSubmit() {
+                    this.modalActive = false;
+                    Swal.fire({ title: 'Menyimpan...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+                    google.script.run
+                        .withSuccessHandler(r => {
+                            Swal.fire('Berhasil', r.message, 'success');
+                            this.loadAdminData();
+                        })
+                        .withFailureHandler(err => Swal.fire('Error', err.message || 'Gagal menugaskan laporan', 'error'))
+                        .manualAssignTaskAdmin(this.modalForm.reportId, this.modalForm.workerId);
+                },
+
+                setupDatabase() {
+                    Swal.fire({ title: 'Menyiapkan Sheet Database...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+                    google.script.run
+                        .withSuccessHandler(res => {
+                            Swal.fire('Berhasil', res.message, 'success');
+                            this.loadAdminData();
+                        })
+                        .withFailureHandler(err => {
+                            Swal.close();
+                            Swal.fire('Error', err.message || 'Gagal setup database', 'error');
+                        })
+                        .setupDatabase();
+                }
+            }
+        }
+    </script>
+</body>
+</html>
